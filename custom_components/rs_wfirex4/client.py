@@ -7,10 +7,12 @@ import logging
 
 from .const import PORT
 from .protocol import (
+    CMD_LEARN,
     CMD_SENSOR,
     build_frame,
     build_send_frame,
     frame_size,
+    parse_learn_response,
     parse_send_response,
 )
 
@@ -85,3 +87,11 @@ class Wfirex4Client:
     async def async_send_wave(self, wave: bytes) -> None:
         """Send an IR waveform."""
         parse_send_response(await self.async_request(build_send_frame(wave)))
+
+    async def async_learn(self) -> bytes:
+        """Wait for an IR signal and return its waveform."""
+        return parse_learn_response(
+            await self.async_request(
+                build_frame(bytes([CMD_LEARN])), read_timeout=LEARN_TIMEOUT
+            )
+        )

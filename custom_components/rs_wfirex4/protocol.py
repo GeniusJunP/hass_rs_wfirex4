@@ -94,3 +94,22 @@ def parse_send_response(data: bytes) -> None:
     payload = parse_frame(data, CMD_SEND)
     if payload[1:2] != bytes([STATUS_OK]):
         raise Wfirex4ProtocolError(f"Send failed with status {payload[1:2].hex()}")
+
+
+def parse_learn_response(data: bytes) -> bytes:
+    """Return the waveform from a learn response.
+
+    The payload is the command, a status byte, a reserved byte, a 2-byte waveform
+    length and the waveform. A status other than 0 means nothing was learned; the
+    device answers so when it times out or another command arrives meanwhile.
+    """
+    payload = parse_frame(data, CMD_LEARN)
+    if payload[1:2] != bytes([STATUS_OK]):
+        raise Wfirex4ProtocolError(f"Learning failed with status {payload[1:2].hex()}")
+    length = int.from_bytes(payload[3:5], "big")
+    wave = payload[5 : 5 + length]
+    if len(wave) != length:
+        raise Wfirex4ProtocolError(
+            f"Truncated waveform in learn response: {data.hex()}"
+        )
+    return wave

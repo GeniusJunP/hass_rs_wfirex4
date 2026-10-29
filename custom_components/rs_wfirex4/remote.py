@@ -26,10 +26,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.storage import Store
 
-from .client import LEARN_TIMEOUT, Wfirex4Client
+from .client import Wfirex4Client
 from .const import DEFAULT_NAME, DOMAIN
 from .helpers import build_default_name_with_mac, build_device_info
-from .protocol import CMD_LEARN, build_frame, build_send_frame, parse_send_response
+from .protocol import build_send_frame, parse_send_response
 
 CODE_STORAGE_VERSION = 1
 FLAG_STORAGE_VERSION = 1
@@ -252,18 +252,12 @@ class Wfirex4Remote(RemoteEntity):
             )
 
             try:
-                data = await self._client.async_request(
-                    build_frame(bytes([CMD_LEARN])), read_timeout=LEARN_TIMEOUT
-                )
+                code = (await self._client.async_learn()).hex()
             finally:
                 async_dismiss(self.hass, notification_id=notify_id)
 
-            if data and data[0:1] == b"\xaa":
-                code = data.hex()[16:]
-                self._attr_extra_state_attributes["last_learn"] = code
-                return code
-            else:
-                raise Exception("Did not get the correct response.")
+            self._attr_extra_state_attributes["last_learn"] = code
+            return code
 
         if not self._attr_is_on:
             _LOGGER.warning(
