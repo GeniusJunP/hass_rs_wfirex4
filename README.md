@@ -11,6 +11,7 @@ This integration now supports configuration via the **Home Assistant UI**, elimi
 * UI-based configuration for easy setup
 * Automatic state updates
 * Configurable scan interval
+* Infrared emitter entity for the Home Assistant `infrared` platform (Home Assistant 2026.6 or later)
 
 ## Installation
 
@@ -52,6 +53,15 @@ This integration now supports configuration via the **Home Assistant UI**, elimi
 
 Once the integration is added, you can adjust options such as scan interval via the **Integration Options** in Home Assistant UI.
 
+## Infrared emitter
+
+Each device also provides an `infrared` emitter entity (e.g. `infrared.living_infrared`).
+Integrations that build IR commands on the [infrared entity platform](https://contributors.home-assistant.io/blog/2026/03/30/infrared-entity-platform/), such as air-conditioner climate integrations, can select it as their emitter.
+
+* The carrier of the device is fixed at 38 kHz. Commands that ask for another carrier (e.g. 36 or 40 kHz) are sent with 38 kHz, which most receivers accept.
+* Intervals are sent in units of 0.1 ms. Intervals longer than 25.5 ms are sent as a chain of `0xFF` bytes, the same way the device stores long gaps it has learned.
+* The sensor polling, the remote and the emitter share one connection lock per device, so they never talk to the device at the same time.
+
 ## Troubleshooting
 
 * Make sure your RS-WFIREX4 device is reachable on your network.
@@ -61,4 +71,11 @@ Once the integration is added, you can adjust options such as scan interval via 
 ## Contributing
 
 Feel free to open issues or pull requests in this repository.
+
+The wire format in `protocol.py` has unit tests that do not need Home Assistant:
+
+```bash
+pip install -r tests/requirements.txt
+pytest tests
+```
 

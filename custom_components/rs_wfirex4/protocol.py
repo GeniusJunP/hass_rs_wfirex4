@@ -113,3 +113,60 @@ def parse_learn_response(data: bytes) -> bytes:
             f"Truncated waveform in learn response: {data.hex()}"
         )
     return wave
+
+
+def timings_to_wave(timings: list[int]) -> bytes:
+    """Convert signed microsecond timings to a waveform.
+
+    Positive values are carrier on and negative values carrier off. Consecutive values
+    of one sign are merged, since the waveform can only alternate. Leading and
+    trailing off time is dropped: the waveform starts with the carrier on, and the
+    device is idle after the last byte anyway. Each interval is rounded half up to
+    0.1 ms, with a minimum of one unit so that no interval vanishes.
+    """
+    intervals: list[int] = []
+    for timing in timings:
+        _append_interval(intervals, timing)
+    while intervals and intervals[0] < 0:
+        intervals.pop(0)
+    while intervals and intervals[-1] < 0:
+        intervals.pop()
+
+    wave = bytearray()
+    for interval in intervals:
+        units = max(1, (abs(interval) + WAVE_UNIT_US // 2) // WAVE_UNIT_US)
+        wave += bytes([WAVE_CONTINUE]) * (units // WAVE_CONTINUE)
+        wave.append(units % WAVE_CONTINUE)
+    return bytes(wave)
+
+
+def wave_to_timings(wave: bytes) -> list[int]:
+    """Convert a waveform to signed microsecond timings.
+
+    The inverse of :func:`timings_to_wave`. A zero-length interval is dropped and the
+    intervals on either side of it, which share a level, are merged.
+    """
+    timings: list[int] = []
+    is_on = True
+    units = 0
+    for byte in wave:
+        units += byte
+        if byte == WAVE_CONTINUE:
+            continue
+        _append_interval(
+            timings, units * WAVE_UNIT_US if is_on else -units * WAVE_UNIT_US
+        )
+        units = 0
+        is_on = not is_on
+    # A waveform that ends in 0xFF ends in the middle of an interval.
+    _append_interval(timings, units * WAVE_UNIT_US if is_on else -units * WAVE_UNIT_US)
+    return timings
+
+
+def _append_interval(timings: list[int], timing: int) -> None:
+    if timing == 0:
+        return
+    if timings and (timings[-1] > 0) == (timing > 0):
+        timings[-1] += timing
+    else:
+        timings.append(timing)

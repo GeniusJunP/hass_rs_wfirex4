@@ -19,7 +19,7 @@ from .sensor import Wfirex4Fetcher
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "remote"]
+PLATFORMS = ["sensor", "remote", "infrared"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
