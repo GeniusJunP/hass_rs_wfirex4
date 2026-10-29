@@ -12,6 +12,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from .client import Wfirex4Client
 from .const import DOMAIN
 from .helpers import test_connection
 from .sensor import Wfirex4Fetcher
@@ -44,6 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data.setdefault(
         DOMAIN,
         {
+            "clients": {},
             "coordinators": {},
             "fetchers": {},
         },
@@ -78,6 +80,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # Use the latest host value so platforms (especially remote) don't use stale IP.
     hass.data[DOMAIN][entry.entry_id] = {**entry.data, CONF_HOST: host}
 
+    # All platforms of a device share one client, which serializes the commands.
+    client = hass.data[DOMAIN]["clients"].get(mac)
+    if client:
+        client.host = host
+    else:
+        client = hass.data[DOMAIN]["clients"][mac] = Wfirex4Client(host)
+
     # -----------------------
     # 3. Prepare sensor coordinator (BEFORE forwarding platforms)
     # -----------------------
@@ -92,7 +101,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         fetcher = hass.data[DOMAIN]["fetchers"].get(mac)
         if not fetcher:
             fetcher = hass.data[DOMAIN]["fetchers"][mac] = Wfirex4Fetcher(
-                host,
+                client,
                 mac,
                 temp_offset,
                 humi_offset,
@@ -103,7 +112,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         else:
             # Update existing fetcher with latest config
             fetcher.apply_config(
-                host=host,
                 temp_offset=temp_offset,
                 humi_offset=humi_offset,
                 scan_interval=scan_interval,

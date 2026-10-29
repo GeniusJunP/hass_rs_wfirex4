@@ -10,7 +10,6 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.components.sensor.const import SensorStateClass
 from homeassistant.const import (
     ATTR_ATTRIBUTION,
-    CONF_HOST,
     CONF_MAC,
     CONF_NAME,
     LIGHT_LUX,
@@ -24,15 +23,14 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .const import DOMAIN, PORT
+from .client import Wfirex4Client
+from .const import DOMAIN
 from .helpers import build_default_name_with_mac, build_device_info, resolve_ip_by_mac
 
 _LOGGER = logging.getLogger(__name__)
 CONF_ATTRIBUTION = ""
 
 # ---- Tuning knobs ----
-CONNECT_TIMEOUT = 4.0  # Intentionally short; on a LAN, ~3-6s is usually sufficient.
-READ_TIMEOUT = 4.0  # Response wait time; on a LAN, ~3-8s is typical.
 MAX_ATTEMPTS = 3  # First try + two retries.
 BACKOFF_BASE = 0.5  # 0.5s, 1.0s, 2.0s...
 BACKOFF_CAP = 2.0  # Cap the backoff to avoid waiting too long.
@@ -72,7 +70,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
     opts = entry.options
 
-    host = data.get(CONF_HOST)
     mac = format_mac(data.get(CONF_MAC))
     name = data.get(CONF_NAME, build_default_name_with_mac(mac))
 
@@ -86,7 +83,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         # Fallback (should be rare): create a coordinator without forcing a first refresh here.
         scan_interval = opts.get("scan_interval", 60)
         fetcher = hass.data[DOMAIN]["fetchers"].get(mac) or Wfirex4Fetcher(
-            host,
+            hass.data[DOMAIN]["clients"][mac],
             mac,
             temp_offset,
             humi_offset,
@@ -173,7 +170,7 @@ class WfirexCoordinatorSensor(CoordinatorEntity, SensorEntity):  # pyright: igno
 class Wfirex4Fetcher:
     def __init__(
         self,
-        host,
+        client: Wfirex4Client,
         mac,
         temp_offset=0,
         humi_offset=0,
@@ -182,9 +179,8 @@ class Wfirex4Fetcher:
         hass=None,
     ):
         self.data = {}
-        self._host = host
+        self._client = client
         self._mac = mac
-        self._port = PORT
         self._temp_offset = temp_offset
         self._humi_offset = humi_offset
         self._scan_interval = scan_interval
@@ -196,7 +192,6 @@ class Wfirex4Fetcher:
     def apply_config(
         self,
         *,
-        host: str,
         temp_offset: float,
         humi_offset: float,
         scan_interval: int,
@@ -204,48 +199,11 @@ class Wfirex4Fetcher:
         hass,
     ) -> None:
         """Apply updated config/option values to an existing fetcher instance."""
-        self._host = host
         self._temp_offset = temp_offset
         self._humi_offset = humi_offset
         self._scan_interval = scan_interval
         self._entry = entry
         self.hass = hass
-
-    async def _fetch_once(self, host: str) -> bytes:
-        """Open a TCP connection, send a request, read the minimum response, then close."""
-        reader = writer = None
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, self._port),
-                timeout=CONNECT_TIMEOUT,
-            )
-
-            # Send a request frame.
-            writer.write(b"\xaa\x00\x01\x18\x50")
-            await writer.drain()
-
-            # Read only what we need; the device may keep the connection open.
-            data = b""
-            while len(data) < MIN_LEN:
-                chunk = await asyncio.wait_for(reader.read(1024), timeout=READ_TIMEOUT)
-                if not chunk:
-                    break
-                data += chunk
-
-            return data
-
-        finally:
-            if writer is not None:
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception as err:
-                    _LOGGER.debug(
-                        "Error closing WFIREX4 connection to %s:%s: %s",
-                        host,
-                        self._port,
-                        err,
-                    )
 
     async def get_sensor_data(self):
         async with self._lock:
@@ -256,13 +214,13 @@ class Wfirex4Fetcher:
             # Record the attempt time. Even on failure, wait scan_interval to avoid hammering the device.
             self._last_fetch_time = now
 
-            host_to_connect = self._host
+            host_to_connect = self._client.host
             last_err = None
             tried_resolve = False
 
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 try:
-                    data = await self._fetch_once(host_to_connect)
+                    data = await self._client.async_fetch_sensor(host_to_connect)
 
                     if len(data) >= MIN_LEN and data[0:1] == b"\xaa":
                         humi = int.from_bytes(data[5:7], byteorder="big")
@@ -301,7 +259,7 @@ class Wfirex4Fetcher:
                                     await self._update_entry_host(resolved_ip)
                                 except Exception:
                                     pass
-                            self._host = resolved_ip
+                            self._client.host = resolved_ip
                             # Retry immediately (no backoff) after switching to a new IP.
                             continue
 
@@ -313,7 +271,7 @@ class Wfirex4Fetcher:
 
             # All attempts exhausted.
             raise UpdateFailed(
-                f"Failed to fetch sensor data from {host_to_connect}:{self._port} "
+                f"Failed to fetch sensor data from {host_to_connect}:{self._client.port} "
                 f"after {MAX_ATTEMPTS} attempts. Last error: {last_err}"
             )
 
