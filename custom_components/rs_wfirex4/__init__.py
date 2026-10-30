@@ -6,20 +6,22 @@ import logging
 from datetime import timedelta
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_MAC
+from homeassistant.const import CONF_HOST, CONF_MAC, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .client import Wfirex4Client
+from .codes import CodeStore
 from .const import DOMAIN
-from .helpers import test_connection
+from .helpers import build_default_name_with_mac, build_device_info, test_connection
 from .sensor import Wfirex4Fetcher
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "remote", "infrared"]
+PLATFORMS = ["sensor", "remote", "button", "infrared"]
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -46,8 +48,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         DOMAIN,
         {
             "clients": {},
+            "codes": {},
             "coordinators": {},
             "fetchers": {},
+            "remotes": {},
         },
     )
 
@@ -86,6 +90,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         client.host = host
     else:
         client = hass.data[DOMAIN]["clients"][mac] = Wfirex4Client(host)
+
+    # The buttons of the learned remotes refer to this device by its id.
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        **build_device_info(mac, entry.data.get(CONF_NAME, build_default_name_with_mac(mac))),
+    )
+
+    # The remote and the buttons share the learned codes.
+    if mac not in hass.data[DOMAIN]["codes"]:
+        codes = CodeStore(hass, mac)
+        await codes.async_load()
+        hass.data[DOMAIN]["codes"][mac] = codes
 
     # -----------------------
     # 3. Prepare sensor coordinator (BEFORE forwarding platforms)

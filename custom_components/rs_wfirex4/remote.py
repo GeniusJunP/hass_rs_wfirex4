@@ -27,11 +27,11 @@ from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.storage import Store
 
 from .client import Wfirex4Client
+from .codes import CodeStore
 from .const import DEFAULT_NAME, DOMAIN
 from .helpers import build_default_name_with_mac, build_device_info
 from .protocol import build_send_frame, parse_send_response
 
-CODE_STORAGE_VERSION = 1
 FLAG_STORAGE_VERSION = 1
 FLAG_SAVE_DELAY = 15
 
@@ -48,6 +48,12 @@ SERVICE_SEND_SCHEMA = COMMAND_SCHEMA.extend(
     {
         vol.Optional(ATTR_DEVICE): vol.All(cv.string, vol.Length(min=1)),
         vol.Optional(ATTR_DELAY_SECS, default=DEFAULT_DELAY_SECS): vol.Coerce(float),
+    }
+)
+
+SERVICE_DELETE_SCHEMA = COMMAND_SCHEMA.extend(
+    {
+        vol.Required(ATTR_DEVICE): vol.All(cv.string, vol.Length(min=1)),
     }
 )
 
@@ -72,23 +78,24 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
         hass.data[DOMAIN]["clients"][mac],
         mac,
         name,
-        Store(hass, CODE_STORAGE_VERSION, "rs_wfirex4_codes"),
+        hass.data[DOMAIN]["codes"][mac],
         Store(hass, FLAG_STORAGE_VERSION, f"rs_wfirex4_{mac.replace(':', '')}_flags"),
     )
+    await remote_entity.async_load_flags()
+    # The buttons send their commands through this entity.
+    hass.data[DOMAIN]["remotes"][mac] = remote_entity
     async_add_entities([remote_entity], update_before_add=False)
-    hass.async_create_task(remote_entity.async_load_storage_files())
 
 
 class Wfirex4Remote(RemoteEntity):
     """Representation of a RS-WFIREX4 remote."""
 
-    def __init__(self, client: Wfirex4Client, mac: str, name: str, code, flag):
+    def __init__(self, client: Wfirex4Client, mac: str, name: str, codes: CodeStore, flag):
         """Initialize the RS-WFIREX4 Remote."""
         self._name = name or DEFAULT_NAME
         self._client = client
-        self._code_storege: Store[Any] = code
+        self._codes = codes
         self._flag_storage: Store[Any] = flag
-        self._codes = {}
         self._flags = defaultdict(int)
         self._attr_is_on = True
         self._codeRegx = re.compile(r"^[0-9a-f]{32,}$")
@@ -97,7 +104,9 @@ class Wfirex4Remote(RemoteEntity):
         self._attr_unique_id = "wfirex4_{}_remote".format(mac)
         self._attr_icon = "mdi:remote"
         self._attr_should_poll = False
-        self._attr_supported_features = RemoteEntityFeature.LEARN_COMMAND
+        self._attr_supported_features = (
+            RemoteEntityFeature.LEARN_COMMAND | RemoteEntityFeature.DELETE_COMMAND
+        )
         self._attr_extra_state_attributes = {}
 
         self._attr_device_info = build_device_info(mac, name)
@@ -137,7 +146,7 @@ class Wfirex4Remote(RemoteEntity):
                 raise KeyError("You need to specify a device")
 
             try:
-                code = self._codes[device][command]
+                code = self._codes.codes[device][command]
             except KeyError as err:
                 raise KeyError("Command not found") from err
 
@@ -159,16 +168,30 @@ class Wfirex4Remote(RemoteEntity):
         """
         return self._flags
 
-    async def async_load_storage_files(self):
-        """Load codes and toggle flags from storage files."""
-        try:
-            self._codes.update(await self._code_storege.async_load() or {})
-        except HomeAssistantError:
-            _LOGGER.error(
-                "Failed to create '%s Remote' entity: Storage error",
-                "{} {}".format(self._name, "Remote"),
-            )
-            # self._code_storege = None
+    async def async_load_flags(self):
+        """Load the toggle flags from the storage file."""
+        self._flags.update(await self._flag_storage.async_load() or {})
+
+    async def async_send_learned(self, device: str, command: str) -> None:
+        """Send one learned command, raising when it fails."""
+        if not self._attr_is_on:
+            raise HomeAssistantError(f"{self.entity_id} is turned off")
+        code, is_toggle_cmd = self.get_code(command, device)
+        await self.set_wfirex(code)
+        if is_toggle_cmd:
+            self._flags[device] ^= 1
+            self._flag_storage.async_delay_save(self.get_flags, FLAG_SAVE_DELAY)
+        self._attr_extra_state_attributes["last_command_sent"] = code
+        self.async_write_ha_state()
+
+    async def async_delete_command(self, **kwargs):
+        """Delete learned commands of a device."""
+        kwargs = SERVICE_DELETE_SCHEMA(kwargs)
+        device = kwargs[ATTR_DEVICE]
+        for command in kwargs[ATTR_COMMAND]:
+            if command not in self._codes.codes.get(device, {}):
+                raise HomeAssistantError(f"Command not found: {device} {command}")
+            await self._codes.async_delete(device, command)
 
     async def async_send_command(self, command, **kwargs):
         """Send a list of commands to a device."""
@@ -265,21 +288,15 @@ class Wfirex4Remote(RemoteEntity):
             )
             return False
 
-        should_store = False
-
         for command in commands:
             try:
                 code = await learn_command(command)
                 if toggle:
                     code = [code, await learn_command(command)]
 
-                self._codes.setdefault(device, {}).update({command: code})
-                should_store = True
+                await self._codes.async_set(device, command, code)
             except Exception as err:
                 _LOGGER.error("Failed to learn '%s': %s", command, err)
                 continue
-
-        if self._code_storege and should_store:
-            await self._code_storege.async_save(self._codes)
 
         return True

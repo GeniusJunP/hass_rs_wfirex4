@@ -11,6 +11,7 @@ This integration now supports configuration via the **Home Assistant UI**, elimi
 * UI-based configuration for easy setup
 * Automatic state updates
 * Configurable scan interval
+* A button for each learned command
 * Infrared emitter entity for the Home Assistant `infrared` platform (Home Assistant 2026.6 or later)
 
 ## Installation
@@ -52,6 +53,23 @@ This integration now supports configuration via the **Home Assistant UI**, elimi
 ### Options
 
 Once the integration is added, you can adjust options such as scan interval via the **Integration Options** in Home Assistant UI.
+
+## Learned commands
+
+Learn a command with `remote.learn_command`, then press the button of the remote you learned it from when the notification appears:
+
+```yaml
+action: remote.learn_command
+target:
+  entity_id: remote.living_remote
+data:
+  device: TV
+  command: Power
+```
+
+* Each learned command gets a `button` entity, under a device named after `device` and connected via the RS-WFIREX4. Pressing it sends the command, the same as `remote.send_command` with that `device` and `command`.
+* `remote.delete_command` removes the command and its button, and the device once its last command is gone.
+* Codes are stored per RS-WFIREX4 (`.storage/rs_wfirex4_<mac>_codes`). Codes from earlier versions, which all devices shared in `.storage/rs_wfirex4_codes`, are copied to each RS-WFIREX4 on its first start. With several devices, remove the copies a device does not send with `remote.delete_command`.
 
 ## Infrared emitter
 
